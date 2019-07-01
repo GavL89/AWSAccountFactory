@@ -1,0 +1,7 @@
+{  
+    "profile":"default",
+    "region" : "us-east-1",
+    "configuration": "Release",
+    "framework": "netcoreapp2.1",
+    "template": "serverless.yml"
+}

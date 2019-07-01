@@ -1,0 +1,148 @@
+service: AWSAccountFactory
+
+plugins:
+  - serverless-step-functions
+  - serverless-pseudo-parameters
+
+provider:
+  name: aws
+  runtime: dotnetcore2.1
+  region: us-east-1
+  timeout: 30
+
+  logRetentionInDays: 90
+
+  environment:
+    stepFunctionsArn: arn:aws:states:#{AWS::Region}:#{AWS::AccountId}:stateMachine:${self:service}-${opt:stage, 'dev'}-AccountCreationMachine
+    emailAdmin: "email@domain.com" # Admin will be emailed upon creation of an account
+    awsLogin: "awsconsole.domain.com" # URL to access the AWS Console
+    idpMetadata: "https://fs.domain.com/FederationMetadata/2007-06/FederationMetadata.xml"
+    AD_AccessKey: "ACCESSKEY" # AD servers are in different AWS account to account factory, get Access Key from that account for access to SSM
+    AD_SecretKey: "SECRETKEY" # AD servers are in different AWS account to account factory, get Secret Key from that account for access to SSM
+    AD_InstanceId: "i-xxxxxxxx" # Instance ID of one of the domain controllers
+    AD_SandboxOU: "OU=Sandboxes,OU=AWS Groups,DC=domain,DC=com" # OU where we want to create sandbox AD groups
+    AD_ProdOU: "OU=AWS Groups,DC=domain,DC=com" # OU where we want to create production AD groups
+    AdditionalAccounts: "xxxxxxxxxxxx,xxxxxxxxxxxx" # Comma separated list of additional AWS accounts you want to manage which are outside of your organization
+
+  apiKeys:
+    - AccessKey
+
+# or you can add iam managed policies by their ARN
+  iamManagedPolicies:
+    - 'arn:aws:iam::aws:policy/AdministratorAccess'
+
+# you can add packaging information here
+package:
+  artifact: bin/release/netcoreapp2.1/deploy-package.zip
+#  exclude:
+#    - exclude-me.js
+#    - exclude-me-dir/**
+
+functions:
+  createAccount:
+    handler: CsharpHandlers::Account.Create::FunctionHandler
+
+  createAccountGetStatus:
+    handler: CsharpHandlers::Account.CreateGetStatus::FunctionHandler
+
+  createSamlProvider:
+    handler: CsharpHandlers::Permissions.CreateSamlProvider::FunctionHandler
+
+  createRolePermissions:
+    handler: CsharpHandlers::Permissions.CreateRole::FunctionHandler
+
+  attachRolePolicy:
+    handler: CsharpHandlers::Permissions.AttachPermission::FunctionHandler
+
+  createGroupAssignUser:
+    handler: CsharpHandlers::ActiveDirectory.CreateGroupAssignUser::FunctionHandler
+
+  sendEmail:
+    handler: CsharpHandlers::Mailer.sendMail::FunctionHandler
+
+  status:
+      handler: CsharpHandlers::StateMachine.StepFunctionStatus::FunctionHandler
+      events:
+        - http:
+            path: status/{id}
+            method: get
+            integration: lambda
+            cors: true
+            private: true
+            request:
+              parameters:
+                path:
+                  id: true
+
+  updateCertificate:
+    handler: CsharpHandlers::Account.UpdateCertificates::FunctionHandler
+    timeout: 120
+
+stepFunctions:
+  stateMachines:
+    AccountCreationMachine:
+      events:
+      - http:
+          path: create
+          method: post
+          private: true
+      name: ${self:service}-${opt:stage, 'dev'}-AccountCreationMachine
+      definition:
+        Comment: "Creates AWS Accounts Automatically"
+        StartAt: CreateAccount
+        States:
+          CreateAccount:
+            Type: Task
+            Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-createAccount
+            Next: WaitForCreation
+          WaitForCreation:
+            Type: Wait
+            Seconds: 5
+            Next: CheckAccountStatus
+          CheckAccountStatus:
+            Type: Task
+            Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-createAccountGetStatus
+            Next: NextStepChoice
+          NextStepChoice:
+            Type: Choice
+            Choices:
+              -
+                Variable: "$.CreateAccountStatus.CreateAccountStatus.State.Value"
+                StringEquals: "IN_PROGRESS"
+                Next: WaitForCreation
+              -
+                Variable: "$.CreateAccountStatus.CreateAccountStatus.State.Value"
+                StringEquals: "SUCCEEDED"
+                Next: WaitForIAM
+              -
+                Variable: "$.CreateAccountStatus.CreateAccountStatus.State.Value"
+                StringEquals: "FAILED"
+                Next: SetupFailed
+          WaitForIAM:
+            Type: Wait
+            Seconds: 30
+            Next: SetupADFS
+          SetupADFS:
+            Type: Task
+            Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-createSamlProvider
+            Next: CreatePolicy
+          CreatePolicy:
+            Type: Task
+            Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-createRolePermissions
+            Next: AttachPolicy
+          AttachPolicy:
+            Type: Task
+            Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-attachRolePolicy
+            Next: CreateADGroups
+          CreateADGroups:
+            Type: Task
+            Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-createGroupAssignUser
+            Next: SendWelcomeEmail
+          SendWelcomeEmail:
+            Type: Task
+            Resource: arn:aws:lambda:#{AWS::Region}:#{AWS::AccountId}:function:${self:service}-${opt:stage}-sendEmail
+            End: true
+          SetupFailed:
+            Type: Fail
+
+# resources:
