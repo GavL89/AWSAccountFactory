@@ -38,7 +38,7 @@ namespace Mailer
                         Data = "Your Sandbox AWS Account is almost ready!"
                     }
                 },
-                Source = "Administrator <email@domain.com>"
+                Source = Environment.GetEnvironmentVariable("SESFrom")
             };
 
             SendEmailResponse response = client.SendEmailAsync(request).Result;

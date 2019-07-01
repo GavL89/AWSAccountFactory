@@ -23,6 +23,7 @@ provider:
     AD_SandboxOU: "OU=Sandboxes,OU=AWS Groups,DC=domain,DC=com" # OU where we want to create sandbox AD groups
     AD_ProdOU: "OU=AWS Groups,DC=domain,DC=com" # OU where we want to create production AD groups
     AdditionalAccounts: "xxxxxxxxxxxx,xxxxxxxxxxxx" # Comma separated list of additional AWS accounts you want to manage which are outside of your organization
+    SESFrom: "Administrator <email@domain.com>"
 
   apiKeys:
     - AccessKey
